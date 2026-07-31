@@ -40,13 +40,24 @@ listing, so 2010+ is fully covered):
 Notes:
 - Do **not** pass `count` for daily klines — the collector already pulls the
   full history; filter by date when reading.
-- The daily-kline collector uses **snapshot** write mode: each run *replaces*
-  the dataset. Collect multiple stocks by passing them all in **one** call
-  (`code` as a list); sequential single-code calls overwrite each other.
-- Read the data back with `preview_dataset` (dataset `daily`). The TDX `daily`
-  dataset uses columns `instrument_id`/`trade_time`/`volume`; the `query` tool
-  targets the Tushare-style core-table schema and is not aligned with the TDX
-  collector output, so prefer `preview_dataset` for TDX-collected klines.
+- Read the data back with either `query` (canonical `ts_code`/`trade_date`/`vol`,
+  supports `symbol`/`start`/`end` filters) or `preview_dataset` (raw dataset
+  columns `instrument_id`/`trade_time`/`volume`). Both see all collected data.
+
+### Full-market collection
+
+To hold every A-share's full daily history locally (for K-line / trend
+analysis), use the resumable batch collector instead of one giant call:
+
+```bash
+./.venv/bin/python scripts/collect_full_market_daily.py --batch-size 120 --adjust qfq
+```
+
+It fetches the current TDX code list (~5500 stocks) and writes one atomic
+Parquet file per batch under `data/core/table=daily/`. Safe to interrupt and
+re-run — already-collected codes are skipped. A full run is ~16-17M rows
+(history back to listing, ~1990) in a few minutes. `list_datasets` reports the
+true on-disk totals via `actual_rows`/`actual_instruments`.
 
 ## Backends
 

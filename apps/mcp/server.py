@@ -281,14 +281,29 @@ def query(
 
     client = _client()
     kwargs: dict[str, Any] = {}
+    extra_filters: dict[str, Any] = dict(filters or {})
     if symbol.strip():
-        kwargs["symbol"] = symbol.strip()
+        # Map the friendly ``symbol`` to the table's actual identifier column
+        # (daily/adj_factor use ``ts_code``; stock_basic_exchange uses
+        # ``instrument_id``), so callers don't need to know the schema.
+        id_field = "ts_code"
+        try:
+            from axdata_core import get_schema
+
+            names = {f.name for f in get_schema(table).fields}
+            id_field = next(
+                (c for c in ("ts_code", "instrument_id", "symbol") if c in names),
+                "ts_code",
+            )
+        except Exception:  # noqa: BLE001 - fall back to ts_code
+            pass
+        extra_filters[id_field] = symbol.strip()
+    if extra_filters:
+        kwargs["filters"] = extra_filters
     if start.strip():
         kwargs["start_date"] = start.strip()
     if end.strip():
         kwargs["end_date"] = end.strip()
-    if filters:
-        kwargs["filters"] = filters
     kwargs["limit"] = int(limit) if limit else None
     try:
         df = client.query(table, fields=_split_fields(fields), **kwargs)
@@ -298,12 +313,37 @@ def query(
     return _dump({"table": table, "returned": len(records), "records": records})
 
 
+def _on_disk_stats(root: Path, dataset: str) -> dict[str, Any]:
+    """Actual row/instrument counts from all Parquet files backing a dataset.
+
+    The metadata-derived summary reflects the last collector run only; querying
+    the files directly gives the true totals when data was written in batches.
+    """
+
+    parquet_root = root / "core" / f"table={dataset}"
+    files = [str(p) for p in parquet_root.rglob("*.parquet")]
+    if not files:
+        return {}
+    try:
+        import duckdb
+
+        rel = "read_parquet(" + repr(files) + ", union_by_name = true)"
+        has_id = "instrument_id" in duckdb.sql(f"SELECT * FROM {rel} LIMIT 0").columns
+        id_expr = "COUNT(DISTINCT instrument_id)" if has_id else "NULL"
+        rows, instruments = duckdb.sql(f"SELECT COUNT(*), {id_expr} FROM {rel}").fetchone()
+        return {"actual_rows": int(rows), "actual_instruments": instruments, "files": len(files)}
+    except Exception:  # noqa: BLE001 - best-effort augmentation
+        return {"files": len(files)}
+
+
 @mcp.tool()
 def list_datasets() -> str:
     """List locally collected Parquet datasets (the persisted data assets).
 
     Returns dataset name, backing interface, layer, row count, date range and
-    quality status. Empty until collection tasks have written local data.
+    quality status. ``row_count`` is the last collector run's metadata; when data
+    was written in batches, ``actual_rows``/``actual_instruments`` reflect the
+    true totals across all Parquet files. Empty until data has been collected.
     """
 
     from axdata_core import list_datasets as _list_datasets
@@ -316,20 +356,20 @@ def list_datasets() -> str:
     out = []
     for summary in summaries:
         d = _asdict(summary)
-        out.append(
-            {
-                "dataset": d.get("dataset"),
-                "interface_name": d.get("interface_name"),
-                "display_name_zh": d.get("display_name_zh"),
-                "layer": d.get("layer"),
-                "row_count": d.get("row_count"),
-                "date_min": d.get("date_min"),
-                "date_max": d.get("date_max"),
-                "columns": d.get("columns"),
-                "quality_status": d.get("quality_status"),
-                "updated_at": d.get("updated_at"),
-            }
-        )
+        entry = {
+            "dataset": d.get("dataset"),
+            "interface_name": d.get("interface_name"),
+            "display_name_zh": d.get("display_name_zh"),
+            "layer": d.get("layer"),
+            "row_count": d.get("row_count"),
+            "date_min": d.get("date_min"),
+            "date_max": d.get("date_max"),
+            "columns": d.get("columns"),
+            "quality_status": d.get("quality_status"),
+            "updated_at": d.get("updated_at"),
+        }
+        entry.update(_on_disk_stats(root, str(d.get("dataset"))))
+        out.append(entry)
     return _dump({"count": len(out), "data_root": str(root), "datasets": out})
 
 
