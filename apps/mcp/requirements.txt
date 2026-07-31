@@ -1,0 +1,4 @@
+# AxData MCP server dependencies.
+# The AxData workspace itself (axdata SDK + axdata_core) must also be importable,
+# e.g. by running with the workspace virtualenv created by scripts/bootstrap.
+mcp>=1.2.0

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "axdata": {
+      "command": ".venv/bin/python",
+      "args": ["apps/mcp/server.py"]
+    }
+  }
+}
