@@ -379,6 +379,130 @@ def preview_dataset(
     )
 
 
+def _resolve_collector_id(target: str) -> str | None:
+    """Resolve a collector id from a collector id or an interface name."""
+
+    from axdata_core import list_registry_collector_dicts
+
+    def _cid(entry: dict[str, Any]) -> str:
+        return str(entry.get("collector_id") or entry.get("collector_name") or entry.get("name"))
+
+    target = target.strip()
+    collectors = list_registry_collector_dicts()
+    if target in {_cid(c) for c in collectors}:
+        return target
+    # Match by backing interface name, e.g. "stock_kline_daily_tdx".
+    for c in collectors:
+        interfaces = c.get("interfaces") or []
+        if target in interfaces or target == c.get("target_interface"):
+            return _cid(c)
+        cid = _cid(c)
+        if cid.split(".")[1:2] == [target] or target in cid:
+            return cid
+    return None
+
+
+@mcp.tool()
+def list_downloaders() -> str:
+    """List collectors that download source data and PERSIST it to local Parquet.
+
+    These are the `download` targets. For A-share daily history the key one is
+    ``stock_kline_daily_tdx`` (日K线, TDX), collector id
+    ``tdx.stock_kline_daily_tdx.snapshot``. Returns each collector's id, backing
+    interface, output dataset and default parameters.
+    """
+
+    from axdata_core import list_registry_collector_dicts
+
+    out = []
+    for c in list_registry_collector_dicts():
+        out.append(
+            {
+                "collector_id": c.get("collector_id") or c.get("collector_name") or c.get("name"),
+                "display_name_zh": c.get("display_name_zh"),
+                "interfaces": c.get("interfaces"),
+                "dataset_id": c.get("dataset_id"),
+                "resource_group": c.get("resource_group"),
+                "default_params": c.get("default_params"),
+                "description": c.get("description"),
+            }
+        )
+    return _dump({"count": len(out), "downloaders": out})
+
+
+@mcp.tool()
+def download(
+    target: str,
+    params: dict[str, Any] | None = None,
+    fields: str | list[str] | None = None,
+    formats: str | list[str] | None = None,
+    output_dir: str = "",
+) -> str:
+    """Download source data and PERSIST it to the local Parquet data layer.
+
+    Runs an AxData collector: it connects to the upstream source (network
+    required), writes Parquet under the local AxData data directory, and records
+    run metadata. Use `list_downloaders` to discover targets. Local mode only
+    (does not use ``AXDATA_API_BASE``).
+
+    A-share daily history example (TDX 日K线 — returns full history back to the
+    stock's listing, so 2010+ is fully covered):
+        target = "stock_kline_daily_tdx"   # or "tdx.stock_kline_daily_tdx.snapshot"
+        params = {"code": "000001.SZ", "adjust": "qfq"}
+    ``adjust`` is one of none / qfq / hfq / fixed_qfq. ``code`` accepts a single
+    code, a list, or a comma-separated string. Do NOT pass ``count`` for daily
+    klines — the collector already pulls the full history; filter by date
+    afterwards.
+
+    IMPORTANT: the daily-kline collector uses snapshot write mode — each run
+    REPLACES the dataset. To collect several stocks, pass them all in ONE call
+    (``code`` as a list); sequential single-code calls overwrite each other.
+
+    Read the result back with `preview_dataset` (the TDX ``daily`` dataset uses
+    columns instrument_id/trade_time/volume).
+
+    Args:
+        target: Collector id or backing interface name.
+        params: Collector parameters (code, adjust, ...).
+        fields: Optional field subset (list or comma-separated string).
+        formats: Optional output formats, e.g. "parquet" or ["parquet", "csv"].
+        output_dir: Optional output directory override.
+    """
+
+    from axdata_core import run_collector
+
+    collector_id = _resolve_collector_id(target)
+    if collector_id is None:
+        return _dump(
+            {"error": f"No collector found for {target!r}. Call list_downloaders for targets."}
+        )
+    try:
+        result = run_collector(
+            collector_id,
+            params=dict(params or {}),
+            fields=_split_fields(fields),
+            data_root=_data_root(),
+            formats=_split_fields(formats),
+            output_dir=output_dir.strip() or None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _dump({"error": str(exc), "collector": collector_id})
+
+    download_result = result.get("download_result") or {}
+    summary = {
+        "collector_id": collector_id,
+        "status": result.get("status"),
+        "dataset": download_result.get("dataset_id") or result.get("dataset_id"),
+        "row_count": download_result.get("row_count"),
+        "rows_written": download_result.get("rows_written"),
+        "rows_after": download_result.get("rows_after"),
+        "output_paths": download_result.get("output_paths"),
+        "quality_status": (result.get("quality") or {}).get("status"),
+        "duration_ms": download_result.get("duration_ms"),
+    }
+    return _dump(summary)
+
+
 def main() -> None:
     """Run the MCP server over stdio."""
 

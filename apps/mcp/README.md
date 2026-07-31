@@ -17,9 +17,36 @@ tables, and make one-shot live source requests.
 | `query` | Query a core table (`daily`, `adj_factor`, `trade_cal`, `stock_basic_exchange`). | local |
 | `list_datasets` | Locally collected Parquet datasets. | local |
 | `preview_dataset` | Sample rows from a collected dataset. | local |
+| `list_downloaders` | Collectors that persist source data to local Parquet. | local |
+| `download` | Run a collector to **download & persist** data locally. | upstream |
 
 Codes use the AxData id format (`000001.SZ`, `600000.SH`); dates are `YYYYMMDD`
 or `YYYY-MM-DD`.
+
+### Downloading A-share history to local
+
+`download` runs an AxData collector (persists Parquet under `data/`). For daily
+K-line history via TDX (returns the **full** history back to each stock's
+listing, so 2010+ is fully covered):
+
+```jsonc
+// tool: download
+{
+  "target": "stock_kline_daily_tdx",          // or "tdx.stock_kline_daily_tdx.snapshot"
+  "params": { "code": ["000001.SZ", "600000.SH"], "adjust": "qfq" }
+}
+```
+
+Notes:
+- Do **not** pass `count` for daily klines — the collector already pulls the
+  full history; filter by date when reading.
+- The daily-kline collector uses **snapshot** write mode: each run *replaces*
+  the dataset. Collect multiple stocks by passing them all in **one** call
+  (`code` as a list); sequential single-code calls overwrite each other.
+- Read the data back with `preview_dataset` (dataset `daily`). The TDX `daily`
+  dataset uses columns `instrument_id`/`trade_time`/`volume`; the `query` tool
+  targets the Tushare-style core-table schema and is not aligned with the TDX
+  collector output, so prefer `preview_dataset` for TDX-collected klines.
 
 ## Backends
 
