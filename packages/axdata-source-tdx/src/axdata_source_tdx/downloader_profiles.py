@@ -476,9 +476,11 @@ def tdx_downloader_profiles(
             interface_name="stock_kline_daily_tdx",
             display_name="日K线",
             downloader_type="history",
+            # `count` is an internal paging detail the public kline gateway
+            # rejects; keep it out of the request params so run_downloader /
+            # client.download() stay valid. Full history is fetched by paging.
             default_params={
                 "code": "000001.SZ",
-                "count": 800,
                 "adjust": "none",
             },
             default_fields=[
@@ -532,7 +534,6 @@ def tdx_downloader_profiles(
             },
             params=[
                 ["code", "string/list", "是", "证券代码：默认 000001.SZ；批量可传列表或英文逗号分隔字符串"],
-                ["count", "integer", "否", "返回最近 K 线数量；默认 800，最大 65535"],
                 ["adjust", "string", "否", "复权参数：none 不复权、qfq 前复权、hfq 后复权、fixed_qfq 定点前复权；默认 none"],
                 ["anchor_date", "string", "否", "定点前复权锚点日期，仅 adjust=fixed_qfq 时使用，格式 YYYYMMDD 或 YYYY-MM-DD"],
             ],

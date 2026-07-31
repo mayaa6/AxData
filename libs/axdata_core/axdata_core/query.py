@@ -31,18 +31,42 @@ def _duckdb_type_for_field(table: str, field: str) -> str:
     return _DUCKDB_TYPE_CASTS.get(field_meta.dtype, "VARCHAR")
 
 
+def _source_column_for_field(table: str, field: str, available_fields: set[str]) -> str | None:
+    """Resolve the parquet column backing a canonical field, honouring aliases.
+
+    Provider-native datasets may store a field under one of its aliases (e.g. the
+    TDX daily collector writes ``instrument_id``/``trade_time``/``volume`` for the
+    canonical ``ts_code``/``trade_date``/``vol``). Prefer the canonical column,
+    then fall back to the first available alias.
+    """
+
+    if field in available_fields:
+        return field
+    schema = get_schema(table)
+    field_meta = next((item for item in schema.fields if item.name == field), None)
+    if field_meta is not None:
+        for alias in field_meta.aliases:
+            if alias in available_fields:
+                return alias
+    return None
+
+
 def _source_field_expression(table: str, field: str, available_fields: set[str]) -> str:
     duckdb_type = _duckdb_type_for_field(table, field)
     quoted = _quote_identifier(field)
 
-    if field not in available_fields:
+    source_column = _source_column_for_field(table, field, available_fields)
+    if source_column is None:
         return f"CAST(NULL AS {duckdb_type}) AS {quoted}"
+    source_quoted = _quote_identifier(source_column)
 
     schema = get_schema(table)
     if field == schema.date_field:
-        return f"REPLACE(CAST({quoted} AS VARCHAR), '-', '') AS {quoted}"
+        # Normalise to YYYYMMDD, tolerating both plain dates and ISO datetimes
+        # (e.g. "2024-01-02" or "2024-01-02T15:00:00+08:00").
+        return f"REPLACE(SUBSTR(CAST({source_quoted} AS VARCHAR), 1, 10), '-', '') AS {quoted}"
 
-    return f"CAST({quoted} AS {duckdb_type}) AS {quoted}"
+    return f"CAST({source_quoted} AS {duckdb_type}) AS {quoted}"
 
 
 def _source_projection(table: str, fields: Sequence[str], available_fields: set[str]) -> str:
