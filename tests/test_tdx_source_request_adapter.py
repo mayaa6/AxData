@@ -5515,6 +5515,22 @@ def test_tdx_stats_resource_reuses_parsed_resource_in_process(tmp_path):
     assert second is first
 
 
+def _expected_default_tdx_stats_cache_root(local_app_data: Path) -> Path:
+    """Expected default TDX stats cache root for the current OS.
+
+    Mirrors ``axdata_source_tdx.stats_cache.user_tdx_stats_cache_root`` so the
+    assertion matches the running platform instead of assuming the Windows
+    ``LOCALAPPDATA`` layout.
+    """
+
+    if os.name == "nt":
+        return (local_app_data / "AxData" / "cache" / "tdx" / "stats").resolve()
+    if sys.platform == "darwin":
+        return (Path.home() / "Library" / "Caches" / "AxData" / "tdx" / "stats").resolve()
+    base = Path(os.getenv("XDG_CACHE_HOME") or (Path.home() / ".cache"))
+    return (base / "axdata" / "tdx" / "stats").resolve()
+
+
 def test_tdx_direct_adapter_default_stats_cache_is_independent_of_cwd(monkeypatch, tmp_path):
     from axdata_source_tdx.stats_cache import default_tdx_stats_cache_root
 
@@ -5532,7 +5548,7 @@ def test_tdx_direct_adapter_default_stats_cache_is_independent_of_cwd(monkeypatc
     second = default_tdx_stats_cache_root()
 
     assert first == second
-    assert first == (local_app_data / "AxData" / "cache" / "tdx" / "stats").resolve()
+    assert first == _expected_default_tdx_stats_cache_root(local_app_data)
 
 
 def test_tdx_adapter_refreshes_stats_cache_older_than_previous_trade_date(monkeypatch, tmp_path):

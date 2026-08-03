@@ -24,6 +24,7 @@ from axdata_core.tdx_plugin_required import TDX_PLUGIN_REQUIRED_MESSAGE
 from tests.test_tdx_source_request_adapter import (
     EchoTqlexClient,
     FakeTdxClient,
+    _expected_default_tdx_stats_cache_root,
     _minimal_stat2_line,
     _minimal_stat_line,
     _stats_zip_bytes,
@@ -6769,9 +6770,7 @@ def test_tdx_provider_installed_from_wheel_is_discovered_and_can_route(
         ).stdout.strip()
         for cwd in (first_cwd, second_cwd)
     ]
-    expected_cache = str(
-        (local_app_data / "AxData" / "cache" / "tdx" / "stats").resolve()
-    )
+    expected_cache = str(_expected_default_tdx_stats_cache_root(local_app_data))
     assert cache_paths == [expected_cache, expected_cache]
 
 
