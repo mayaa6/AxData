@@ -1,0 +1,54 @@
+services:
+  api:
+    build: .
+    image: axdata
+    ports:
+      - "8666:8666"
+    environment:
+      AXDATA_API_HOST: "0.0.0.0"
+      AXDATA_API_PORT: "8666"
+      AXDATA_WEB_PORT: "8667"
+      AXDATA_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+      - ./metadata:/app/metadata
+      - ./logs:/app/logs
+      - ./cache:/app/cache
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "8667:80"
+    depends_on:
+      - api
+
+  # One-shot collection jobs: docker compose run --rm worker update daily --source csv
+  worker:
+    build: .
+    image: axdata
+    profiles: ["tools"]
+    entrypoint: ["python", "-m", "services.worker.cli"]
+    environment:
+      AXDATA_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+      - ./metadata:/app/metadata
+      - ./logs:/app/logs
+      - ./cache:/app/cache
+
+  # stdio MCP server: docker compose run --rm -T mcp
+  mcp:
+    build: .
+    image: axdata
+    profiles: ["tools"]
+    entrypoint: ["python", "apps/mcp/server.py"]
+    stdin_open: true
+    environment:
+      AXDATA_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+      - ./metadata:/app/metadata
+      - ./logs:/app/logs
+      - ./cache:/app/cache

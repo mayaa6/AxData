@@ -99,6 +99,32 @@ npm run dev:web
 http://127.0.0.1:8667
 ```
 
+### Docker 运行
+
+只需要安装 Docker，无需本机 Python / Node 环境：
+
+```bash
+docker compose up -d --build
+```
+
+API 在 `http://127.0.0.1:8666`，Web 控制台在 `http://127.0.0.1:8667`。
+`data/`、`metadata/`、`logs/`、`cache/` 以卷的形式挂载到容器，数据保留在本机。
+
+一次性采集任务和 stdio MCP 服务在 `tools` profile 中：
+
+```bash
+docker compose run --rm worker update daily --source csv
+docker compose run --rm -T mcp
+```
+
+停止：
+
+```bash
+docker compose down
+```
+
+### 本机运行
+
 完整项目需要本机先具备 3 个运行环境：
 
 | 环境 | 用途 |
