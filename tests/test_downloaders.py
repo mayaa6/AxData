@@ -1624,12 +1624,42 @@ def test_downloader_engine_quality_reports_extra_non_trading_dates():
         primary_key=("ts_code", "trade_date"),
         date_field="trade_date",
         calendar_check=True,
-        trade_calendar_dates={"SZSE": ["20240102", "20240103", "20240104", "20240105"]},
+        trade_calendar_dates={"SZSE": ["20240102", "20240103", "20240104", "20240105", "20240108"]},
     )
 
     assert quality["quality_status"] == "error"
     assert quality["calendar_coverage_status"] == "error"
     assert quality["extra_non_trading_dates"] == ["20240106"]
+    assert quality["uncovered_date_count"] == 0
+
+
+def test_downloader_engine_quality_warns_when_dates_precede_calendar_coverage():
+    from axdata_core.downloader_engine import DownloadQualityChecker
+
+    checker = DownloadQualityChecker()
+
+    quality = checker.evaluate(
+        pd.DataFrame.from_records(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "19910403"},
+                {"ts_code": "000001.SZ", "trade_date": "20240102"},
+                {"ts_code": "000001.SZ", "trade_date": "20240103"},
+            ]
+        ),
+        primary_key=("ts_code", "trade_date"),
+        date_field="trade_date",
+        calendar_check=True,
+        trade_calendar_dates={"SZSE": ["20240102", "20240103"]},
+    )
+
+    assert quality["quality_status"] == "warn"
+    assert quality["calendar_coverage_status"] == "warn"
+    assert quality["extra_non_trading_dates"] == []
+    assert quality["uncovered_date_count"] == 1
+    assert quality["uncovered_date_samples"] == ["19910403"]
+    assert quality["per_symbol_date_coverage"][0]["extra_non_trading_date_count"] == 0
+    assert quality["per_symbol_date_coverage"][0]["uncovered_date_count"] == 1
+    assert any("outside calendar coverage" in message for message in quality["quality_warnings"])
 
 
 def test_downloader_engine_quality_warns_when_calendar_is_missing():

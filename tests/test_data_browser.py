@@ -282,6 +282,83 @@ def test_data_browser_uses_axdata_data_dir_for_core_tables(monkeypatch, tmp_path
     ]
 
 
+def test_data_browser_reports_metadata_only_quality_for_core_tables(monkeypatch, tmp_path) -> None:
+    data_root = tmp_path / "data"
+    core_dir = data_root / "core"
+    core_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {"exchange": "SSE", "cal_date": "20240102", "is_open": True, "pretrade_date": "20231229"},
+            {"exchange": "SSE", "cal_date": "20240103", "is_open": True, "pretrade_date": "20240102"},
+        ]
+    ).to_parquet(core_dir / "trade_cal.parquet", engine="pyarrow", index=False)
+
+    monkeypatch.setenv("AXDATA_DATA_DIR", str(data_root))
+
+    dataset = get_dataset("trade_cal")
+    assert dataset.quality_status == "ok"
+    assert dataset.quality["quality_check_scope"] == "metadata_only"
+    assert dataset.quality["row_count_value"] == 2
+    assert dataset.quality["missing_required_columns"] == []
+    assert dataset.quality_errors == []
+
+
+def test_data_browser_flags_empty_core_table_as_error(monkeypatch, tmp_path) -> None:
+    data_root = tmp_path / "data"
+    core_dir = data_root / "core"
+    core_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {"exchange": [], "cal_date": [], "is_open": [], "pretrade_date": []}
+    ).to_parquet(core_dir / "trade_cal.parquet", engine="pyarrow", index=False)
+
+    monkeypatch.setenv("AXDATA_DATA_DIR", str(data_root))
+
+    dataset = get_dataset("trade_cal")
+    assert dataset.quality_status == "error"
+    assert dataset.quality_errors == ["Table is empty."]
+
+
+def test_data_browser_keeps_downloader_quality_over_core_table_scan(tmp_path) -> None:
+    data_root, _ = _write_daily_run(tmp_path)
+    partition = data_root / "core" / "table=daily" / "parquet"
+    partition.mkdir(parents=True)
+    pd.DataFrame(DAILY_ROWS).to_parquet(partition / "daily.parquet", engine="pyarrow", index=False)
+
+    daily = get_dataset("daily", data_root=data_root)
+    assert daily.quality_status == "ok"
+    assert daily.quality.get("quality_check_scope") is None
+    assert daily.latest_run_id == "run_browser_daily"
+
+
+def test_data_browser_merge_prefers_downloader_quality_on_timestamp_tie() -> None:
+    from axdata_core.data_browser import _merge_summary
+
+    run_summary = DatasetSummary(
+        dataset="daily",
+        interface_name="daily",
+        output_paths={"parquet": "/tmp/run.parquet"},
+        quality={"quality_status": "error", "quality_errors": ["boom"]},
+        quality_status="error",
+        quality_errors=["boom"],
+    )
+    core_summary = DatasetSummary(
+        dataset="daily",
+        interface_name="daily",
+        output_paths={"parquet": "/tmp/core.parquet"},
+        quality={"quality_status": "ok", "quality_check_scope": "metadata_only"},
+        quality_status="ok",
+    )
+
+    entries: dict[str, DatasetSummary] = {}
+    _merge_summary(entries, run_summary)
+    _merge_summary(entries, core_summary)
+
+    merged = entries["daily"]
+    assert merged.quality_status == "error"
+    assert merged.quality_errors == ["boom"]
+    assert merged.quality.get("quality_check_scope") is None
+
+
 def test_data_browser_stats_marks_large_directory_as_limited(monkeypatch, tmp_path) -> None:
     data_root = tmp_path / "data"
     partition_root = data_root / "core" / "table=daily"

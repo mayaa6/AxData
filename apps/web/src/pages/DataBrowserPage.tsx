@@ -371,7 +371,9 @@ export function DataBrowserPage({
                   <strong>{datasetDisplayName(dataset)}</strong>
                   <small>{dataset.logical_table || dataset.dataset}</small>
                   <span>{dataset.layer || "数据表"} · {formatRows(dataset.row_count) || "未采集"}</span>
-                  <em className={qualityClass(dataset.quality_status)}>{formatQuality(dataset.quality_status)}</em>
+                  <em className={qualityClass(dataset.quality_status)} title={qualityTitle(dataset)}>
+                    {formatQuality(dataset.quality_status)}
+                  </em>
                 </button>
               ))}
             </div>
@@ -391,7 +393,9 @@ export function DataBrowserPage({
                   <Table2 size={20} />
                   <h2>{datasetDisplayName(activeDataset)}</h2>
                   <code className="dataset-title-id">{activeDataset.dataset}</code>
-                  <span className={qualityBadgeClass(activeDataset.quality_status)}>{formatQuality(activeDataset.quality_status)}</span>
+                  <span className={qualityBadgeClass(activeDataset.quality_status)} title={qualityTitle(activeDataset)}>
+                    {formatQuality(activeDataset.quality_status)}
+                  </span>
                   <button
                     className="ghost-action compact danger dataset-delete-action"
                     disabled={deleteBusyDataset === activeDataset.dataset}
@@ -525,9 +529,11 @@ function datasetFacts(dataset: DatasetSummary): TableRow[] {
     ["预计路径", formatExpectedPaths(dataset), "声明里的默认输出目录；未采集时也可以看到"],
     ["行数", formatRows(dataset.row_count), "优先使用质量元数据，必要时读取 Parquet footer/schema 补充"],
     ["日期范围", formatDateRange(dataset), "来自 quality.date_range 或 Parquet metadata/小范围查询"],
+    ["质检范围", qualityScopeLabel(quality.quality_check_scope), "full=采集时完整质检；metadata_only=仅按 Parquet 元数据核对"],
     ["交易日历", cellText(quality.calendar_coverage_status), "ok / warn / error；无本地 trade_cal 时为 warn"],
     ["日期缺口", cellText(quality.date_gap_count), "交易日历范围内缺失的交易日数量"],
-    ["非交易日", cellText(quality.extra_non_trading_dates), "样本化展示出现在非交易日的数据日期"],
+    ["非交易日", cellText(quality.extra_non_trading_dates), "样本化展示出现在非交易日的数据日期（仅日历覆盖区间内）"],
+    ["日历未覆盖", cellText(quality.uncovered_date_count), "落在 trade_cal 覆盖区间之外、无法判定的数据日期数量"],
     ["K线异常", cellText(quality.price_ohlc_anomaly_count), "OHLC 高低开收关系异常行数"],
     ["复权异常", cellText(quality.invalid_adj_factor_count), "adj_factor <= 0 的行数"],
     ["最近 run", dataset.latest_run_id || "", dataset.latest_run_status || ""],
@@ -740,6 +746,24 @@ function formatDateRange(dataset: DatasetSummary) {
     return `${start} - ${end}`;
   }
   return start ?? end ?? "";
+}
+
+function qualityScopeLabel(scope: unknown) {
+  if (scope === "metadata_only") {
+    return "metadata_only（仅元数据）";
+  }
+  if (typeof scope === "string" && scope) {
+    return scope;
+  }
+  return "full";
+}
+
+function qualityTitle(dataset: Pick<DatasetSummary, "quality" | "quality_status">) {
+  const scope = (dataset.quality ?? {}).quality_check_scope;
+  if (scope === "metadata_only") {
+    return "仅按 Parquet 元数据（路径、列、行数）核对，未逐行质检";
+  }
+  return undefined;
 }
 
 function formatQuality(status: string | null | undefined) {

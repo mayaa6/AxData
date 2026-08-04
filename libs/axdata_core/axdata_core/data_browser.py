@@ -830,7 +830,63 @@ def _summary_from_core_table(root: Path, table: str) -> DatasetSummary | None:
         primary_key=list(schema.primary_key),
         date_field=schema.date_field,
     )
-    return _enrich_summary_from_paths(summary, root=root)
+    summary = _enrich_summary_from_paths(summary, root=root)
+    _apply_core_table_quality(summary, schema=schema)
+    return summary
+
+
+def _apply_core_table_quality(summary: DatasetSummary, *, schema: TableSchema) -> None:
+    """Attach a metadata-only quality verdict to a core table discovered by file scan.
+
+    These tables carry no downloader quality record, so the browser used to render them as
+    "未知". The checks here read parquet footers only (row counts, column names, declared
+    paths) and never scan row values, which is why the verdict is scoped as ``metadata_only``.
+    """
+
+    warnings: list[str] = []
+    errors: list[str] = []
+    checks: list[str] = []
+
+    if summary.missing_paths:
+        errors.append("Declared output path(s) are missing: " + ", ".join(summary.missing_paths))
+    checks.append("output_paths_exist")
+
+    inspect_error = summary.metadata.get("inspect_error")
+    if inspect_error:
+        warnings.append(f"Parquet metadata could not be read: {inspect_error}")
+
+    actual_columns = list(summary.columns)
+    required_columns = [name for name in (*schema.primary_key, schema.date_field) if name]
+    missing_required = [name for name in required_columns if name not in actual_columns]
+    if missing_required:
+        errors.append("Missing required column(s): " + ", ".join(missing_required))
+    checks.append("required_columns_present")
+
+    row_count = summary.row_count
+    checks.append("row_count")
+    if row_count is None:
+        if not inspect_error:
+            warnings.append("Row count is unavailable because parquet statistics were truncated.")
+    elif row_count <= 0:
+        errors.append("Table is empty.")
+
+    status = "error" if errors else "warn" if warnings else "ok"
+    summary.quality_status = status
+    summary.quality_warnings = warnings
+    summary.quality_errors = errors
+    summary.quality = {
+        **dict(summary.quality or {}),
+        "quality_status": status,
+        "quality_warnings": warnings,
+        "quality_errors": errors,
+        "quality_check_scope": "metadata_only",
+        "quality_checks_applied": checks,
+        "row_count_value": row_count,
+        "required_columns_present": not missing_required,
+        "missing_required_columns": missing_required,
+        "schema_columns": actual_columns,
+        "date_field": schema.date_field,
+    }
 
 
 def _merge_summary(entries: dict[str, DatasetSummary], summary: DatasetSummary) -> None:
@@ -872,7 +928,28 @@ def _merge_summary(entries: dict[str, DatasetSummary], summary: DatasetSummary) 
         merged.primary_key = existing.primary_key or summary.primary_key
     if not merged.date_field:
         merged.date_field = existing.date_field or summary.date_field
+    _prefer_full_quality(merged, existing if merged is summary else summary)
     entries[summary.dataset] = merged
+
+
+def _is_metadata_only_quality(summary: DatasetSummary) -> bool:
+    quality = summary.quality
+    return isinstance(quality, Mapping) and quality.get("quality_check_scope") == "metadata_only"
+
+
+def _prefer_full_quality(merged: DatasetSummary, other: DatasetSummary) -> None:
+    """Keep a real downloader quality verdict over a missing or metadata-only one."""
+
+    if not other.quality_status:
+        return
+    if merged.quality_status and not _is_metadata_only_quality(merged):
+        return
+    if _is_metadata_only_quality(other):
+        return
+    merged.quality = dict(other.quality)
+    merged.quality_status = other.quality_status
+    merged.quality_warnings = list(other.quality_warnings)
+    merged.quality_errors = list(other.quality_errors)
 
 
 def _apply_dataset_declaration(

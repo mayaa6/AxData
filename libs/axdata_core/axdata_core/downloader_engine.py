@@ -948,6 +948,8 @@ class DownloadQualityChecker:
             "actual_trading_day_count": None,
             "missing_trading_dates": [],
             "extra_non_trading_dates": [],
+            "uncovered_date_count": 0,
+            "uncovered_date_samples": [],
             "date_gap_count": 0,
             "missing_date_samples": [],
             "per_symbol_date_coverage": [],
@@ -989,23 +991,36 @@ class DownloadQualityChecker:
 
         start = actual_dates[0]
         end = actual_dates[-1]
+        calendar_min = all_calendar_dates[0]
+        calendar_max = all_calendar_dates[-1]
         expected_dates = [date for date in all_calendar_dates if start <= date <= end]
         missing_dates = sorted(set(expected_dates) - set(actual_dates))
-        extra_dates = sorted(set(actual_dates) - set(all_calendar_dates))
+        # Dates outside the calendar's own coverage window cannot be classified: absence from the
+        # calendar there means "not collected yet", not "not a trading day".
+        uncovered_dates = [date for date in actual_dates if date < calendar_min or date > calendar_max]
+        covered_dates = [date for date in actual_dates if calendar_min <= date <= calendar_max]
+        extra_dates = sorted(set(covered_dates) - set(all_calendar_dates))
 
         base.update(
             {
-                "calendar_date_range": {"min": all_calendar_dates[0], "max": all_calendar_dates[-1]},
+                "calendar_date_range": {"min": calendar_min, "max": calendar_max},
                 "expected_trading_day_count": len(expected_dates),
                 "missing_trading_dates": self._sample_values(missing_dates),
                 "extra_non_trading_dates": self._sample_values(extra_dates),
+                "uncovered_date_count": len(uncovered_dates),
+                "uncovered_date_samples": self._sample_values(uncovered_dates),
                 "date_gap_count": len(missing_dates),
                 "missing_date_samples": self._sample_values(missing_dates),
             }
         )
-        if start < all_calendar_dates[0] or end > all_calendar_dates[-1]:
+        if uncovered_dates:
             warnings.append(
-                "Trading calendar does not fully cover the dataset date range; gap counts may be incomplete."
+                f"Trading calendar covers {calendar_min}-{calendar_max} but the dataset spans {start}-{end}; "
+                f"{len(uncovered_dates)} date(s) outside calendar coverage were not classified and gap "
+                "counts may be incomplete."
+            )
+            base["calendar_next_action"] = (
+                f"回补 trade_cal 至 {start} 之前，再重新运行质检以覆盖完整区间。"
             )
 
         symbol_name = symbol_field or self._infer_symbol_field(frame, primary_key)
@@ -1191,6 +1206,11 @@ class DownloadQualityChecker:
                 continue
             expected_source = self._calendar_dates_for_symbol(symbol, calendar_by_exchange, all_calendar_dates)
             expected = [date for date in expected_source if actual[0] <= date <= actual[-1]]
+            covered = (
+                [date for date in actual if expected_source[0] <= date <= expected_source[-1]]
+                if expected_source
+                else []
+            )
             missing = sorted(set(expected) - set(actual))
             suspensions = {
                 normalized_date
@@ -1206,7 +1226,8 @@ class DownloadQualityChecker:
                     "actual_trading_day_count": len(actual),
                     "missing_date_count": len(missing),
                     "missing_date_samples": self._sample_values(missing),
-                    "extra_non_trading_date_count": len(set(actual) - set(expected_source)),
+                    "extra_non_trading_date_count": len(set(covered) - set(expected_source)),
+                    "uncovered_date_count": len(actual) - len(covered),
                 }
             )
             unexplained.extend({"symbol": symbol, "date": date} for date in unexplained_dates)
