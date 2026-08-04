@@ -25,6 +25,7 @@ data/factor/**
 data/snapshot/**
 data/cache/**
 data/tmp_*/**
+data/_backup/**
 data/通达信/**
 metadata/*.sqlite
 metadata/*.db
