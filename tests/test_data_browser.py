@@ -154,6 +154,38 @@ def test_data_browser_reports_stale_output_paths(tmp_path) -> None:
     assert dataset.missing_paths == [str(parquet_path.resolve())]
 
 
+def test_data_browser_reanchors_output_paths_recorded_under_another_root(tmp_path) -> None:
+    data_root, parquet_path = _write_daily_run(tmp_path)
+    local_path = data_root / "core" / "table=daily" / "parquet" / "daily_20240102.parquet"
+    local_path.parent.mkdir(parents=True)
+    parquet_path.replace(local_path)
+
+    store = CollectorSchedulerStore(data_root=data_root)
+    run = store.list_runs(limit=1)[0]
+    foreign_path = "/app/data/core/table=daily/parquet/daily_20240102.parquet"
+    result = dict(run.result)
+    result["download_result"] = {
+        **result["download_result"],
+        "output_paths": {"parquet": foreign_path},
+    }
+    store.update_run(
+        run.run_id,
+        output_paths={"parquet": foreign_path},
+        result=result,
+    )
+
+    dataset = get_dataset("daily", data_root=data_root)
+
+    assert dataset.missing_paths == []
+    assert dataset.output_paths == {"parquet": str(local_path)}
+    assert dataset.metadata["recorded_output_paths"] == {"parquet": foreign_path}
+
+    preview = preview_dataset("daily", data_root=data_root, symbol="000001.SZ", limit=10)
+
+    assert preview.preview_paths == [str(local_path.resolve())]
+    assert len(preview.rows) == 2
+
+
 def test_data_browser_omits_declared_only_datasets(monkeypatch, tmp_path) -> None:
     data_root = tmp_path / "data"
 

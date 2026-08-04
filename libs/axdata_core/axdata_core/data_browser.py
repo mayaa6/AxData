@@ -1125,15 +1125,43 @@ def _declared_formats(
     return ordered or ["parquet"]
 
 
+def _reanchor_output_path(path_text: str, root: Path) -> Path:
+    """Resolve one recorded output path against the current data root.
+
+    Run logs record the absolute path of the process that produced them. The very
+    same tree is reached through a different prefix elsewhere (``/app/data`` in the
+    Docker image, another checkout on another host), so an absolute path that no
+    longer exists is re-anchored on its data layer segment before it is reported
+    as stale metadata.
+    """
+
+    path = Path(path_text).expanduser()
+    if not path.is_absolute():
+        return (root / path).resolve()
+    if path.exists():
+        return path
+    parts = path.parts
+    for index in range(len(parts) - 1, -1, -1):
+        if _normalize_path_component(parts[index]) not in KNOWN_DATA_LAYERS:
+            continue
+        candidate = root.joinpath(*parts[index:])
+        if candidate.exists():
+            return candidate
+    return path
+
+
 def _enrich_summary_from_paths(summary: DatasetSummary, *, root: Path) -> DatasetSummary:
     missing: list[str] = []
-    for path_text in summary.output_paths.values():
-        path = Path(path_text).expanduser()
-        if not path.is_absolute():
-            path = (root / path).resolve()
+    resolved_paths: dict[str, str] = {}
+    for key, path_text in summary.output_paths.items():
+        path = _reanchor_output_path(path_text, root)
+        resolved_paths[key] = str(path)
         if not path.exists():
             if len(missing) < MAX_MISSING_PATHS:
                 missing.append(str(path))
+    if resolved_paths != summary.output_paths:
+        summary.metadata.setdefault("recorded_output_paths", dict(summary.output_paths))
+        summary.output_paths = resolved_paths
     summary.missing_paths = missing
 
     if not summary.columns:
