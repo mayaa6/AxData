@@ -269,6 +269,40 @@ AxData 的稳定数据资产以 Parquet 为事实源。采集任务会记录任�
 
 当前默认采集器目录为 TDX 8 个独立采集器，主要用于验证采集链路、提供基础示例和覆盖常用核心数据。默认任务保持小样本参数，不会一键全市场重采。更多接口可以按同一套采集器规范扩展为独立采集器插件。
 
+## 复权换算
+
+日线建议按**不复权（除权）**口径落盘，前复权/后复权在使用时由除权除息事件换算得到。先采集一次全市场事件：
+
+```python
+from axdata_core import run_downloader
+
+run_downloader("stock_capital_changes_tdx", params={"scope": "all", "category": "xdxr"})
+```
+
+然后换算：
+
+```bash
+./.venv/bin/python scripts/adjust_prices.py 300894.SZ --mode qfq --convention factor
+```
+
+```python
+from axdata_core.adjust import apply_adjustment, load_xdxr_events
+
+events = load_xdxr_events("data", instrument_id="300894.SZ")
+qfq = apply_adjustment(daily_unadjusted, events, mode="qfq", convention="factor")
+```
+
+两种口径按用途选择：
+
+| convention | 说明 | 适用 |
+| --- | --- | --- |
+| `factor` | Tushare 风格累计 `adj_factor`，价格按比例缩放 | 回测、收益率计算；价格恒为正 |
+| `tdx` | 通达信 / 同花顺自身的复权算法 | 需要和行情软件显示值对齐 |
+
+差异来自算法本身：每次除权除息事件的参考价为
+`(前收盘 - 每股派息 + 每股配股数 × 配股价) / (1 + 每股送转数 + 每股配股数)`。
+`tdx` 直接复合这个仿射映射，纯现金分红时退化为减法，因此**长分红历史的老股票前复权价会变成负数**（如 600809.SH 有 5371 个负价日）；`factor` 改为按比例缩放，不会出现负价，且百分比收益率正确。
+
 ## 插件体系
 
 AxData 插件是本地安装、本地启用、本地运行的 Python 扩展包。

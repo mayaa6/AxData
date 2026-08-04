@@ -1507,8 +1507,12 @@ def _candidate_calendar_roots(
     data_root: str | Path | None,
     output_root: str | Path | None,
 ) -> list[Path]:
+    # Only fall back to the working directory when no root was supplied at all;
+    # an explicit root must not silently borrow another tree's calendar.
+    explicit = (data_root, output_root)
+    candidates = explicit if any(root is not None for root in explicit) else (Path.cwd() / "data",)
     roots: list[Path] = []
-    for candidate in (data_root, output_root, Path.cwd() / "data"):
+    for candidate in candidates:
         if candidate is None:
             continue
         try:
