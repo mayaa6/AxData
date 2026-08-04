@@ -30,6 +30,10 @@ class DownloadRequestPlan:
     fields: list[str] | None
     options: dict[str, Any]
     adapter_options: dict[str, Any]
+    # Downloader-level params the source contract does not accept (e.g. the
+    # kline ``count`` sample size). They are applied locally after the request
+    # instead of being forwarded, which the source gateway would reject.
+    local_params: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -38,6 +42,7 @@ class DownloadRequestPlan:
             "fields": list(self.fields) if self.fields is not None else None,
             "options": dict(self.options),
             "adapter_options": dict(self.adapter_options),
+            "local_params": dict(self.local_params),
         }
 
 
@@ -110,7 +115,8 @@ class DefaultRequestPlanner:
         fields: list[str] | None = None,
         concurrency: Any | None = None,
     ) -> DownloadRequestPlan:
-        request_params = self._request_params_for_download(profile, params or {})
+        downloader_params = self._request_params_for_download(profile, params or {})
+        request_params, local_params = self._split_source_params(profile, downloader_params)
         request_fields = fields if fields is not None else profile.default_fields
         options: dict[str, Any] = {}
         adapter_options: dict[str, Any] = {}
@@ -129,7 +135,42 @@ class DefaultRequestPlanner:
             fields=request_fields,
             options=options,
             adapter_options=adapter_options,
+            local_params=local_params,
         )
+
+    def _split_source_params(
+        self,
+        profile: Any,
+        params: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Split downloader params into source-request params and local ones.
+
+        A downloader profile may expose knobs the source interface contract does
+        not accept -- the kline ``count`` sample size is one: paging is private
+        to the source gateway, which rejects it, while the downloader uses it to
+        keep only the most recent N rows. Forwarding those params would fail
+        validation, so they are handed back for the downloader to apply itself.
+        """
+
+        known = self._contract_param_names(profile.interface_name)
+        if known is None:
+            return params, {}
+        request_params = {key: value for key, value in params.items() if key in known}
+        local_params = {key: value for key, value in params.items() if key not in known}
+        return request_params, local_params
+
+    @staticmethod
+    def _contract_param_names(interface_name: str) -> set[str] | None:
+        """Param names the source contract accepts, or None if unresolvable."""
+
+        try:
+            from .source_request import _contract_for_interface
+
+            contract = _contract_for_interface(interface_name)
+        except Exception:  # noqa: BLE001 - unknown contract: forward unchanged
+            return None
+        names = getattr(contract, "parameter_names", None)
+        return set(names) if names else None
 
     def _request_params_for_download(
         self,

@@ -882,7 +882,7 @@ def run_downloader(
         eta_ms=None,
     )
     transform_started_perf = perf_counter()
-    records = result.records
+    records = _apply_local_row_limit(result.records, request_plan.local_params, profile)
     frame = pd.DataFrame.from_records(records)
     snapshot_date, snapshot_date_source = _snapshot_date(profile, result.meta, started_at, records=records)
     collection_time = _collection_time(started_at)
@@ -1003,6 +1003,50 @@ def _request_download_records(
         options=options,
         data_root=data_root,
     )
+
+
+def _sample_size(value: Any) -> int | None:
+    """Positive row limit, or None when absent/non-numeric (e.g. ``"all"``)."""
+
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _apply_local_row_limit(
+    records: list[dict[str, Any]],
+    local_params: dict[str, Any],
+    profile: DownloaderProfile,
+) -> list[dict[str, Any]]:
+    """Keep only the most recent ``count`` rows per instrument.
+
+    Downloader profiles expose ``count`` as a sample size ("返回最近 K 线数量"),
+    but paging is private to the source gateway, which rejects the param and
+    always returns the full history. The limit is therefore applied here, after
+    the request, so the profile's documented behaviour still holds.
+    """
+
+    limit = _sample_size(local_params.get("count"))
+    if limit is None or not records:
+        return records
+
+    time_field = profile.datetime_field or profile.date_field
+    key_field = "instrument_id" if "instrument_id" in records[0] else None
+
+    groups: dict[Any, list[int]] = {}
+    for index, row in enumerate(records):
+        groups.setdefault(row.get(key_field) if key_field else None, []).append(index)
+
+    keep: set[int] = set()
+    for indices in groups.values():
+        if time_field and all(time_field in records[index] for index in indices):
+            indices = sorted(indices, key=lambda index: str(records[index].get(time_field) or ""))
+        keep.update(indices[-limit:])
+    return [row for index, row in enumerate(records) if index in keep]
 
 
 def _resolve_output_directory(

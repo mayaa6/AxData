@@ -1101,6 +1101,70 @@ def test_build_request_plan_filters_downloader_params_and_records_concurrency():
     assert plan.options["concurrency"] == concurrency.to_dict()
 
 
+@pytest.mark.parametrize(
+    "interface_name",
+    [
+        "stock_kline_daily_tdx",
+        "stock_daily_price_limit_tdx",
+        "stock_codes_tdx",
+        "stock_limit_ladder_tdx",
+    ],
+)
+def test_build_request_plan_only_forwards_params_the_source_contract_accepts(interface_name):
+    """Planned params must pass the real gateway validation, not just a mock.
+
+    The daily-kline profile declares ``count`` as a sample size while the source
+    gateway deliberately rejects paging params, so forwarding the profile's
+    defaults verbatim made client.download() fail at runtime. The download tests
+    mock request_interface, so only checking against the live contract catches it.
+    """
+
+    from axdata_core.source_request import _contract_for_interface, validate_params
+
+    profile = get_downloader_profile(interface_name)
+    plan = downloaders_module.build_request_plan(
+        profile,
+        params=None,
+        fields=None,
+        concurrency=downloaders_module._normalize_concurrency(profile),
+    )
+
+    validate_params(_contract_for_interface(interface_name), plan.params)
+
+
+def test_build_request_plan_keeps_kline_count_as_a_local_sample_size():
+    profile = get_downloader_profile("stock_kline_daily_tdx")
+
+    plan = downloaders_module.build_request_plan(
+        profile,
+        params={"code": "000001.SZ", "count": 5},
+        fields=None,
+        concurrency=downloaders_module._normalize_concurrency(profile),
+    )
+
+    assert "count" not in plan.params
+    assert plan.local_params == {"count": 5}
+
+
+def test_local_row_limit_keeps_most_recent_rows_per_instrument():
+    profile = get_downloader_profile("stock_kline_daily_tdx")
+    records = [
+        {"instrument_id": code, "trade_time": f"2026-06-{day:02d}T15:00:00+08:00", "close": day}
+        for code in ("000001.SZ", "600000.SH")
+        for day in (16, 17, 18)
+    ]
+
+    limited = downloaders_module._apply_local_row_limit(records, {"count": 2}, profile)
+
+    assert len(limited) == 4
+    assert [row["trade_time"][:10] for row in limited if row["instrument_id"] == "000001.SZ"] == [
+        "2026-06-17",
+        "2026-06-18",
+    ]
+    # A non-numeric limit (e.g. the "all" some profiles default to) trims nothing.
+    assert downloaders_module._apply_local_row_limit(records, {"count": "all"}, profile) == records
+
+
 def test_downloader_engine_writer_quality_and_metadata_are_source_neutral(tmp_path):
     from axdata_core.downloader_engine import (
         DownloadMetadataWriter,
@@ -2607,7 +2671,9 @@ def test_stock_kline_daily_downloader_writes_core_sample_and_duckdb_can_read(tmp
             }
         )
         assert interface_name == "stock_kline_daily_tdx"
-        assert params == {"code": "000001.SZ", "count": 2, "adjust": "none"}
+        # `count` is a downloader-level sample size applied after the request;
+        # the kline source contract rejects paging params, so it is not forwarded.
+        assert params == {"code": "000001.SZ", "adjust": "none"}
         assert fields == get_downloader_profile("stock_kline_daily_tdx").default_fields
         assert persist is False
         assert adapter is fake_adapter
@@ -2680,7 +2746,7 @@ def test_stock_kline_daily_downloader_writes_core_sample_and_duckdb_can_read(tmp
     assert calls == [
         {
             "interface_name": "stock_kline_daily_tdx",
-            "params": {"code": "000001.SZ", "count": 2, "adjust": "none"},
+            "params": {"code": "000001.SZ", "adjust": "none"},
             "fields": get_downloader_profile("stock_kline_daily_tdx").default_fields,
             "persist": False,
             "adapter": fake_adapter,
