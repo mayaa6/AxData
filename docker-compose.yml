@@ -24,6 +24,25 @@ services:
     depends_on:
       - api
 
+  # Post-close daily rebuild, Mon-Fri 16:00 Beijing (scripts/scheduler.py).
+  # Lives in a container so nothing is installed on the host. Status:
+  #   logs/scheduler/state.json   what the scheduler is waiting for
+  #   logs/daily_update/*.json    one record per rebuild, `outcome` field
+  # Manual run: docker compose exec scheduler python scripts/daily_update.py --force
+  scheduler:
+    build: .
+    image: axdata
+    entrypoint: ["python", "scripts/scheduler.py"]
+    restart: unless-stopped
+    environment:
+      AXDATA_DATA_DIR: /app/data
+      AXDATA_UPDATE_AT: "16:00"
+    volumes:
+      - ./data:/app/data
+      - ./metadata:/app/metadata
+      - ./logs:/app/logs
+      - ./cache:/app/cache
+
   # One-shot collection jobs: docker compose run --rm worker update daily --source csv
   worker:
     build: .

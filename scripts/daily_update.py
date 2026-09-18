@@ -20,6 +20,11 @@ Usage (from the workspace root, with the workspace venv):
     ./.venv/bin/python scripts/daily_update.py --limit 200
 
 Exit codes: 0 success or deliberately skipped, 1 failure (nothing was swapped).
+
+Every run writes a JSON record under logs/daily_update whose ``outcome`` is one of
+``updated``, ``skipped_before_close``, ``skipped_non_trading``, ``rejected`` or
+``failed``; ``scripts/scheduler.py`` and anything monitoring the job read that
+field rather than the human-readable ``skipped`` text.
 """
 
 from __future__ import annotations
@@ -439,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
         reason = f"{now:%Y-%m-%d %H:%M} 未到收盘口径（北京 {close_at}）"
         log(f"skipped: {reason}")
         record["skipped"] = reason
+        record["outcome"] = "skipped_before_close"
         write_run_record(root, record)
         return 0
 
@@ -456,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001
         log(f"code list failed: {exc}")
         record["error"] = f"stock_codes_tdx: {exc}"
+        record["outcome"] = "failed"
         write_run_record(root, record)
         return 1
 
@@ -474,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
                 reason = f"{now:%Y-%m-%d} 不是交易日（最新收盘 {latest}）"
                 log(f"skipped: {reason}")
                 record["skipped"] = reason
+                record["outcome"] = "skipped_non_trading"
                 write_run_record(root, record)
                 return 0
         except Exception as exc:  # noqa: BLE001 - a rebuild on a holiday is cheap
@@ -490,6 +498,7 @@ def main(argv: list[str] | None = None) -> int:
                 log(f"REJECTED: {problem}")
             log("staging kept for inspection; live dataset untouched")
             record["swapped"] = False
+            record["outcome"] = "rejected"
             write_run_record(root, record)
             return 1
 
@@ -515,11 +524,13 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - always leave a run record behind
         log(f"failed: {exc}")
         record["error"] = str(exc)
+        record["outcome"] = "failed"
         record["traceback"] = traceback.format_exc()
         write_run_record(root, record)
         return 1
 
     record["durationMs"] = int((datetime.now(CHINA_TZ) - now).total_seconds() * 1000)
+    record["outcome"] = "updated"
     path = write_run_record(root, record)
     log(f"done in {record['durationMs'] / 1000:.0f}s; run record {path}")
     return 0
