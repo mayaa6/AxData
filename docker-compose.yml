@@ -2,6 +2,7 @@ services:
   api:
     build: .
     image: axdata
+    restart: unless-stopped
     ports:
       - "8666:8666"
     environment:
@@ -19,6 +20,7 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
     ports:
       - "8667:80"
     depends_on:
